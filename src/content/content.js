@@ -1,0 +1,663 @@
+/* AcFun 文章区助手 - content script
+ * 负责：扫描文章列表/详情/评论，识别 UID，应用屏蔽/标记规则
+ */
+(function () {
+  'use strict';
+  if (window.__acfunBlockInjected) return;
+  window.__acfunBlockInjected = true;
+
+  const USER_LINK_RE = /\/(?:u|user)\/(\d+)/;
+  const ARTICLE_LINK_RE = /\/v\/as(\d+)/;
+  const COMMENT_HINT_RE = /comment|reply|comment-item|commentItem|CommentList|comment-list/i;
+
+  let config = null;
+  let observer = null;
+  let debounceTimer = null;
+
+  /* ============================================================
+   * 工具函数
+   * ============================================================ */
+  function extractUid(href) {
+    if (!href) return null;
+    const m = String(href).match(USER_LINK_RE);
+    return m ? m[1] : null;
+  }
+
+  function isOnArticleDetail() {
+    return ARTICLE_LINK_RE.test(location.pathname);
+  }
+
+  function showTip(message, type) {
+    const tip = document.createElement('div');
+    tip.className = 'acfun-floating-tip' + (type ? ' is-' + type : '');
+    tip.textContent = message;
+    document.body.appendChild(tip);
+    setTimeout(() => {
+      tip.style.transition = 'opacity 0.3s';
+      tip.style.opacity = '0';
+      setTimeout(() => tip.remove(), 320);
+    }, 1800);
+  }
+
+  /* ============================================================
+   * 容器识别
+   * ============================================================ */
+  function findCardContainer(articleLink) {
+    // 优先找 li / article / 含特定 class 的祖先
+    let el = articleLink;
+    for (let i = 0; i < 6 && el && el !== document.body; i++) {
+      el = el.parentElement;
+      if (!el) break;
+      const cls = (el.className && typeof el.className === 'string') ? el.className : '';
+      if (
+        el.tagName === 'LI' ||
+        el.tagName === 'ARTICLE' ||
+        /article|feed|card|item|post|list-item|FeedItem|ArticleItem|article-item/i.test(cls)
+      ) {
+        return el;
+      }
+    }
+    return articleLink.parentElement || articleLink;
+  }
+
+  function findAuthorInContainer(container) {
+    if (!container) return null;
+    // 在容器里找形如 /u/数字 的链接
+    const links = container.querySelectorAll('a[href]');
+    for (const link of links) {
+      if (USER_LINK_RE.test(link.href)) {
+        return link;
+      }
+    }
+    return null;
+  }
+
+  function findDetailContainer() {
+    // 文章详情页：找 main/article 容器
+    const candidates = [
+      'main article',
+      'main',
+      'article',
+      '[class*="article-container"]',
+      '[class*="ArticleContainer"]',
+      '[class*="article-detail"]',
+      '[class*="ArticleDetail"]',
+      '[class*="article-body"]',
+      '[class*="ArticleBody"]',
+      '#article-content',
+      '#article'
+    ];
+    for (const sel of candidates) {
+      const el = document.querySelector(sel);
+      if (el) return el;
+    }
+    return null;
+  }
+
+  function findCommentItems() {
+    // 评论区里：找包含用户链接、且父级含 comment 关键字的元素
+    const out = [];
+    const allLinks = document.querySelectorAll('a[href*="/u/"]');
+    for (const link of allLinks) {
+      if (!USER_LINK_RE.test(link.href)) continue;
+      // 向上找包含 comment 关键字的祖先
+      let el = link;
+      for (let i = 0; i < 8 && el && el !== document.body; i++) {
+        el = el.parentElement;
+        if (!el) break;
+        const cls = (el.className && typeof el.className === 'string') ? el.className : '';
+        if (COMMENT_HINT_RE.test(cls) || el.tagName === 'LI' && /comment/i.test(cls)) {
+          out.push({ el, authorLink: link });
+          break;
+        }
+      }
+    }
+    return out;
+  }
+
+  /* ============================================================
+   * 规则应用
+   * ============================================================ */
+  function clearMarks(el) {
+    el.classList.remove(
+      'acfun-block-hidden',
+      'acfun-block-collapsed',
+      'acfun-block-dim',
+      'acfun-mark-highlight',
+      'acfun-mark-badge',
+      'acfun-mark-border'
+    );
+    el.removeAttribute('data-acfun-block-processed');
+    el.removeAttribute('data-acfun-uid');
+    el.removeAttribute('data-acfun-action');
+    el.style.removeProperty('--acfun-mark-color');
+    // 移除快捷按钮
+    const btn = el.querySelector(':scope > .acfun-quick-action');
+    if (btn) btn.remove();
+  }
+
+  function applyBlock(el, uid) {
+    el.classList.remove('acfun-mark-highlight', 'acfun-mark-badge', 'acfun-mark-border');
+    el.setAttribute('data-acfun-block-processed', '1');
+    el.setAttribute('data-acfun-uid', uid);
+    const mode = config.blockMode || 'hide';
+    if (mode === 'collapse') {
+      el.classList.add('acfun-block-collapsed');
+    } else if (mode === 'dim') {
+      el.classList.add('acfun-block-dim');
+    } else {
+      el.classList.add('acfun-block-hidden');
+    }
+  }
+
+  function applyMark(el, uid) {
+    el.classList.remove('acfun-block-hidden', 'acfun-block-collapsed', 'acfun-block-dim');
+    el.setAttribute('data-acfun-block-processed', '1');
+    el.setAttribute('data-acfun-uid', uid);
+    const style = config.markStyle || 'highlight';
+    el.style.setProperty('--acfun-mark-color', config.markColor || '#fff3a0');
+    if (style === 'badge') el.classList.add('acfun-mark-badge');
+    else if (style === 'border') el.classList.add('acfun-mark-border');
+    else el.classList.add('acfun-mark-highlight');
+  }
+
+  function addQuickButton(el, uid) {
+    if (!config.showQuickButton) return;
+    if (el.querySelector(':scope > .acfun-quick-action')) return;
+
+    const inBlock = config.blockList.includes(uid);
+    const inMark = config.markList.includes(uid);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'acfun-quick-action' + (inBlock ? ' is-blocked' : inMark ? ' is-marked' : '');
+    btn.textContent = inBlock ? '已屏蔽' : inMark ? '已关注' : '屏蔽';
+    btn.title = `UID: ${uid}`;
+    btn.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      await toggleUser(uid, inBlock ? 'unblock' : inMark ? 'unmark' : 'block');
+    });
+    el.appendChild(btn);
+  }
+
+  function processItem(el, uid, authorLink) {
+    // 屏蔽：作用整个 el（卡片 / 详情页正文）
+    // 关注：只作用作者署名那一小块，**不**染色整张卡片
+    const byline = findBylineContainer(authorLink);
+
+    // 先清掉 el 和 byline 上可能残留的标记
+    clearMarks(el);
+    if (byline && byline !== el) clearMarks(byline);
+
+    if (config.blockList.includes(uid)) {
+      applyBlock(el, uid);
+    } else if (config.markList.includes(uid)) {
+      if (byline) applyMark(byline, uid);
+    }
+    // 始终在卡片上添加快捷按钮（即便未屏蔽/标记也能快速操作）
+    if (config.showQuickButton) addQuickButton(el, uid);
+  }
+
+  function findBylineContainer(authorLink) {
+    if (!authorLink) return null;
+    // 1) 优先找 class 含 author / byline / user 的祖先
+    let el = authorLink.parentElement;
+    let depth = 0;
+    while (el && el !== document.body && depth < 5) {
+      const cls = (el.className && typeof el.className === 'string') ? el.className : '';
+      if (/author|byline|user[-_]?info|username|userName|publish|meta/i.test(cls)) {
+        return el;
+      }
+      el = el.parentElement;
+      depth++;
+    }
+    // 2) 没有合适的祖先，用父级
+    const parent = authorLink.parentElement;
+    if (!parent) return authorLink;
+
+    // 3) 父级太大（基本就是整张卡片），就降级到作者链接本身
+    try {
+      const pr = parent.getBoundingClientRect();
+      const lr = authorLink.getBoundingClientRect();
+      if (pr.width > lr.width * 4 && pr.height > lr.height * 3) {
+        return authorLink;
+      }
+    } catch (e) { /* getBoundingClientRect 可能在隐藏元素上抛错 */ }
+    return parent;
+  }
+
+  async function toggleUser(uid, action) {
+    if (!uid) return;
+    if (action === 'block') {
+      await AcFunBlockStorage.addToBlock(uid);
+      showTip(`已屏蔽 UID ${uid}`, 'success');
+    } else if (action === 'unblock') {
+      await AcFunBlockStorage.removeFromBlock(uid);
+      showTip(`已解除屏蔽 UID ${uid}`, 'success');
+    } else if (action === 'mark') {
+      await AcFunBlockStorage.addToMark(uid);
+      showTip(`已关注 UID ${uid}`, 'success');
+    } else if (action === 'unmark') {
+      await AcFunBlockStorage.removeFromMark(uid);
+      showTip(`已取消关注 UID ${uid}`, 'success');
+    }
+  }
+
+  /* ============================================================
+   * 悬停浮动工具栏
+   *   鼠标悬停在 /u/数字 链接上时弹出，可在任何页面/位置使用
+   * ============================================================ */
+  let hoverToolbar = null;
+  let hoverCurrentLink = null;
+  let hoverCurrentUid = null;
+  let hoverHideTimer = null;
+
+  function ensureHoverToolbar() {
+    if (hoverToolbar) return hoverToolbar;
+    hoverToolbar = document.createElement('div');
+    hoverToolbar.className = 'acfun-hover-toolbar';
+    hoverToolbar.setAttribute('data-acfun-block', 'hover-toolbar');
+    document.body.appendChild(hoverToolbar);
+
+    // 鼠标进入工具栏时取消隐藏，离开时延迟隐藏
+    hoverToolbar.addEventListener('mouseenter', () => {
+      if (hoverHideTimer) { clearTimeout(hoverHideTimer); hoverHideTimer = null; }
+    });
+    hoverToolbar.addEventListener('mouseleave', () => {
+      scheduleHoverHide();
+    });
+
+    return hoverToolbar;
+  }
+
+  function renderHoverToolbar(uid) {
+    const tb = ensureHoverToolbar();
+    const inBlock = config.blockList.includes(uid);
+    const inMark = config.markList.includes(uid);
+    const note = (config.notes && config.notes[uid]) || '';
+
+    tb.innerHTML = '';
+
+    // 头部：UID + 状态标签
+    const head = document.createElement('div');
+    head.className = 'acfun-hover-head';
+
+    const uidEl = document.createElement('span');
+    uidEl.className = 'acfun-hover-uid';
+    uidEl.textContent = 'UID ' + uid;
+    head.appendChild(uidEl);
+
+    if (inBlock) {
+      const tag = document.createElement('span');
+      tag.className = 'acfun-hover-tag is-blocked';
+      tag.textContent = '已屏蔽';
+      head.appendChild(tag);
+    } else if (inMark) {
+      const tag = document.createElement('span');
+      tag.className = 'acfun-hover-tag is-marked';
+      tag.textContent = '已关注';
+      head.appendChild(tag);
+    }
+    tb.appendChild(head);
+
+    if (note) {
+      const noteEl = document.createElement('div');
+      noteEl.className = 'acfun-hover-note';
+      noteEl.textContent = '📝 ' + note;
+      tb.appendChild(noteEl);
+    }
+
+    // 操作按钮
+    const actions = document.createElement('div');
+    actions.className = 'acfun-hover-actions';
+
+    if (inBlock) {
+      const btn = mkBtn('acfun-btn-unblock', '✓ 解除屏蔽', async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        await AcFunBlockStorage.removeFromBlock(uid);
+        showTip('已解除屏蔽 UID ' + uid, 'success');
+        renderHoverToolbar(uid);
+      });
+      actions.appendChild(btn);
+    } else {
+      const btn = mkBtn('acfun-btn-block', '🚫 屏蔽此用户', async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        await AcFunBlockStorage.addToBlock(uid);
+        showTip('已屏蔽 UID ' + uid, 'success');
+        renderHoverToolbar(uid);
+      });
+      actions.appendChild(btn);
+    }
+
+    if (inMark) {
+      const btn = mkBtn('acfun-btn-unmark', '取消关注', async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        await AcFunBlockStorage.removeFromMark(uid);
+        showTip('已取消关注 UID ' + uid, 'success');
+        renderHoverToolbar(uid);
+      });
+      actions.appendChild(btn);
+    } else {
+      const btn = mkBtn('acfun-btn-mark', '⭐ 关注', async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        await AcFunBlockStorage.addToMark(uid);
+        showTip('已关注 UID ' + uid, 'success');
+        renderHoverToolbar(uid);
+      });
+      actions.appendChild(btn);
+    }
+
+    // 主页链接
+    const profile = document.createElement('a');
+    profile.className = 'acfun-btn-profile';
+    profile.href = 'https://www.acfun.cn/u/' + uid;
+    profile.target = '_blank';
+    profile.rel = 'noopener noreferrer';
+    profile.textContent = '主页';
+    profile.addEventListener('click', (e) => e.stopPropagation());
+    actions.appendChild(profile);
+
+    tb.appendChild(actions);
+  }
+
+  function mkBtn(cls, text, onclick) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = cls;
+    b.textContent = text;
+    b.addEventListener('click', onclick);
+    return b;
+  }
+
+  function positionHoverToolbar(link) {
+    const tb = hoverToolbar;
+    if (!tb) return;
+    const rect = link.getBoundingClientRect();
+    // 先临时显示以读取尺寸
+    tb.style.visibility = 'hidden';
+    tb.classList.add('show');
+    const tbRect = tb.getBoundingClientRect();
+
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const margin = 8;
+    const gap = 6;
+
+    // 默认放在链接下方
+    let top = rect.bottom + gap;
+    let left = rect.left;
+
+    // 下方空间不够则放上方
+    if (top + tbRect.height > vh - margin) {
+      top = rect.top - tbRect.height - gap;
+    }
+    // 上方也不够就贴顶
+    if (top < margin) top = margin;
+
+    // 右侧超出则右对齐到视口
+    if (left + tbRect.width > vw - margin) {
+      left = vw - tbRect.width - margin;
+    }
+    if (left < margin) left = margin;
+
+    tb.style.top = top + 'px';
+    tb.style.left = left + 'px';
+    tb.style.visibility = 'visible';
+  }
+
+  function showHoverToolbar(link) {
+    if (!config || !config.enabled) return;
+    const uid = extractUid(link.href);
+    if (!uid) return;
+
+    // 已经在同一个链接上显示了就不重渲染
+    if (hoverCurrentLink === link && hoverToolbar && hoverToolbar.classList.contains('show')) {
+      return;
+    }
+    hoverCurrentLink = link;
+    hoverCurrentUid = uid;
+    if (hoverHideTimer) { clearTimeout(hoverHideTimer); hoverHideTimer = null; }
+
+    renderHoverToolbar(uid);
+    positionHoverToolbar(link);
+  }
+
+  function hideHoverToolbar() {
+    if (hoverToolbar) hoverToolbar.classList.remove('show');
+    hoverCurrentLink = null;
+    hoverCurrentUid = null;
+  }
+
+  function scheduleHoverHide() {
+    if (hoverHideTimer) clearTimeout(hoverHideTimer);
+    hoverHideTimer = setTimeout(hideHoverToolbar, 220);
+  }
+
+  function setupHoverDetection() {
+    document.addEventListener('mouseover', (e) => {
+      const link = e.target.closest && e.target.closest('a[href]');
+      if (!link) return;
+      if (!USER_LINK_RE.test(link.href)) return;
+      // 不要被工具栏里的链接（包括「主页」按钮）触发重新定位
+      if (hoverToolbar && hoverToolbar.contains(link)) return;
+      if (hoverHideTimer) { clearTimeout(hoverHideTimer); hoverHideTimer = null; }
+      showHoverToolbar(link);
+    }, true);
+
+    document.addEventListener('mouseout', (e) => {
+      const link = e.target.closest && e.target.closest('a[href]');
+      if (!link) return;
+      if (!USER_LINK_RE.test(link.href)) return;
+      // 如果鼠标移到了工具栏上，不隐藏
+      if (e.relatedTarget && hoverToolbar && hoverToolbar.contains(e.relatedTarget)) return;
+      scheduleHoverHide();
+    }, true);
+
+    // 滚动 / 按 Esc 关闭
+    window.addEventListener('scroll', () => {
+      if (hoverToolbar && hoverToolbar.classList.contains('show')) hideHoverToolbar();
+    }, { passive: true, capture: true });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') hideHoverToolbar();
+    });
+  }
+
+  /* ============================================================
+   * 详情页：被屏蔽文章时显示占位
+   * ============================================================ */
+  function showBlockedArticlePlaceholder(uid) {
+    if (document.querySelector('.acfun-blocked-article-placeholder')) return;
+
+    const ph = document.createElement('div');
+    ph.className = 'acfun-blocked-article-placeholder';
+
+    const card = document.createElement('div');
+    card.className = 'acfun-blocked-card';
+
+    const icon = document.createElement('div');
+    icon.className = 'acfun-blocked-icon';
+    icon.textContent = '🚫';
+    card.appendChild(icon);
+
+    const title = document.createElement('h2');
+    title.textContent = '此文章作者已被屏蔽';
+    card.appendChild(title);
+
+    const uidP = document.createElement('p');
+    const uidCode = document.createElement('code');
+    uidCode.textContent = 'UID ' + uid;
+    uidP.appendChild(document.createTextNode('作者：'));
+    uidP.appendChild(uidCode);
+    card.appendChild(uidP);
+
+    const note = (config.notes && config.notes[uid]) || '';
+    if (note) {
+      const noteP = document.createElement('p');
+      noteP.className = 'acfun-blocked-note';
+      noteP.textContent = '备注：' + note;
+      card.appendChild(noteP);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'acfun-blocked-actions';
+
+    const unblockBtn = document.createElement('button');
+    unblockBtn.className = 'acfun-btn-unblock';
+    unblockBtn.textContent = '解除屏蔽';
+    unblockBtn.onclick = async () => {
+      await AcFunBlockStorage.removeFromBlock(uid);
+      showTip('已解除屏蔽 UID ' + uid, 'success');
+      setTimeout(() => location.reload(), 400);
+    };
+    actions.appendChild(unblockBtn);
+
+    const backBtn = document.createElement('button');
+    backBtn.className = 'acfun-btn-ghost';
+    backBtn.textContent = '返回上一页';
+    backBtn.onclick = () => {
+      if (history.length > 1) history.back();
+      else location.href = 'https://www.acfun.cn/';
+    };
+    actions.appendChild(backBtn);
+
+    const openOpts = document.createElement('button');
+    openOpts.className = 'acfun-btn-ghost';
+    openOpts.textContent = '管理名单';
+    openOpts.onclick = () => chrome.runtime.sendMessage({ type: 'ACFUN_BLOCK_OPEN_OPTIONS' });
+    actions.appendChild(openOpts);
+
+    card.appendChild(actions);
+    ph.appendChild(card);
+    document.body.appendChild(ph);
+  }
+
+  /* ============================================================
+   * 主流程
+   * ============================================================ */
+  function unprocessAll() {
+    document.querySelectorAll('[data-acfun-block-processed]').forEach(clearMarks);
+    document.querySelectorAll('.acfun-blocked-article-placeholder').forEach(el => el.remove());
+  }
+
+  function processPage() {
+    if (!config || !config.enabled) {
+      unprocessAll();
+      return;
+    }
+
+    // 1. 文章卡片（列表）
+    const articleLinks = document.querySelectorAll('a[href*="/v/as"]');
+    const seen = new WeakSet();
+    articleLinks.forEach(articleLink => {
+      const articleMatch = articleLink.href.match(ARTICLE_LINK_RE);
+      if (!articleMatch) return;
+      const card = findCardContainer(articleLink);
+      if (!card || seen.has(card)) return;
+      seen.add(card);
+      const authorLink = findAuthorInContainer(card);
+      if (!authorLink) return;
+      const uid = extractUid(authorLink.href);
+      if (!uid) return;
+      processItem(card, uid, authorLink);
+    });
+
+    // 2. 文章详情页主体
+    if (isOnArticleDetail()) {
+      const detail = findDetailContainer();
+      if (detail) {
+        // 详情页的作者链接可能就在 article 内部
+        const authorLink = findAuthorInContainer(detail);
+        if (authorLink) {
+          const uid = extractUid(authorLink.href);
+          if (uid) {
+            processItem(detail, uid, authorLink);
+            // 如果作者被屏蔽，显示占位说明
+            if (config.blockList.includes(uid)) {
+              try { showBlockedArticlePlaceholder(uid); } catch (e) { console.warn('[AcFunBlock] placeholder', e); }
+            }
+          }
+        }
+      }
+    }
+
+    // 3. 评论区
+    if (config.processComments) {
+      const comments = findCommentItems();
+      comments.forEach(({ el, authorLink }) => {
+        const uid = extractUid(authorLink.href);
+        if (!uid) return;
+        if (el.dataset.acfunBlockProcessed) return;
+        processItem(el, uid, authorLink);
+      });
+    }
+  }
+
+  function setupObserver() {
+    if (observer) observer.disconnect();
+    observer = new MutationObserver(() => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        if (config && config.enabled) {
+          processPage();
+        }
+      }, 250);
+    });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+  }
+
+  async function init() {
+    config = await AcFunBlockStorage.loadConfig();
+
+    AcFunBlockStorage.onChange((newCfg) => {
+      config = newCfg;
+      unprocessAll();
+      processPage();
+    });
+
+    // 等待 DOM 准备好
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', processPage);
+    } else {
+      processPage();
+    }
+    setupObserver();
+    setupHoverDetection();
+
+    // 监听来自 popup/options 的消息
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      if (!msg || !msg.type) return;
+      if (msg.type === 'ACFUN_BLOCK_REFRESH') {
+        (async () => {
+          config = await AcFunBlockStorage.loadConfig();
+          unprocessAll();
+          processPage();
+          // 关闭可能还显示的悬停工具栏
+          hideHoverToolbar();
+          sendResponse({ ok: true });
+        })();
+        return true;
+      }
+      if (msg.type === 'ACFUN_BLOCK_GET_CURRENT_UIDS') {
+        const uids = collectCurrentUids();
+        sendResponse({ uids, url: location.href });
+        return;
+      }
+    });
+  }
+
+  function collectCurrentUids() {
+    const set = new Set();
+    document.querySelectorAll('a[href*="/u/"]').forEach(link => {
+      const uid = extractUid(link.href);
+      if (uid) set.add(uid);
+    });
+    return Array.from(set);
+  }
+
+  init();
+})();

@@ -1,0 +1,388 @@
+/* AcFun 文章区助手 - 注入到 acfun.cn 的样式 */
+
+.acfun-block-hidden {
+  display: none !important;
+}
+
+.acfun-block-collapsed {
+  position: relative !important;
+  max-height: 64px !important;
+  overflow: hidden !important;
+  opacity: 0.55 !important;
+  filter: grayscale(0.6) !important;
+  cursor: pointer !important;
+  transition: max-height 0.2s ease, opacity 0.2s ease;
+  border: 1px dashed #888 !important;
+  background: #f5f5f5 !important;
+}
+
+.acfun-block-collapsed::after {
+  content: '🚫 已屏蔽用户 UID ' attr(data-acfun-uid) ' — 点击展开';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  white-space: nowrap;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.acfun-block-collapsed:hover {
+  max-height: 4000px !important;
+  opacity: 1 !important;
+  filter: none !important;
+}
+
+.acfun-block-dim {
+  opacity: 0.25 !important;
+  filter: grayscale(1) !important;
+  transition: opacity 0.15s ease;
+}
+
+.acfun-block-dim:hover {
+  opacity: 0.9 !important;
+  filter: grayscale(0.3) !important;
+}
+
+.acfun-mark-highlight {
+  background: var(--acfun-mark-color, #fff3a0) !important;
+  box-shadow: 0 0 0 2px var(--acfun-mark-color, #fff3a0) !important;
+  border-radius: 2px;
+}
+
+.acfun-mark-badge::before {
+  content: '★ 已关注 UID ' attr(data-acfun-uid);
+  display: inline-block;
+  margin: 2px 4px 2px 0;
+  padding: 1px 6px;
+  background: #ff5722;
+  color: #fff;
+  font-size: 11px;
+  border-radius: 3px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+.acfun-mark-border {
+  outline: 2px solid var(--acfun-mark-color, #ff9800) !important;
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
+/* 快捷操作按钮 */
+.acfun-quick-action {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 9999;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 18px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+[data-acfun-block-processed]:hover > .acfun-quick-action,
+.acfun-quick-action:hover,
+.acfun-quick-action:focus {
+  opacity: 1;
+}
+
+.acfun-quick-action.is-blocked {
+  background: #c62828 !important;
+  opacity: 0.85;
+}
+
+.acfun-quick-action.is-marked {
+  background: #ef6c00 !important;
+  opacity: 0.85;
+}
+
+.acfun-quick-action:active {
+  transform: scale(0.95);
+}
+
+/* 详情页的显眼操作区（保留兼容旧 DOM 残留） */
+.acfun-author-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.acfun-author-toolbar button {
+  padding: 3px 10px;
+  font-size: 12px;
+  line-height: 18px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  transition: all 0.15s;
+}
+
+.acfun-author-toolbar .acfun-btn-block {
+  background: #c62828;
+  color: #fff;
+}
+
+.acfun-author-toolbar .acfun-btn-block:hover { background: #b71c1c; }
+
+.acfun-author-toolbar .acfun-btn-mark {
+  background: #ef6c00;
+  color: #fff;
+}
+
+.acfun-author-toolbar .acfun-btn-mark:hover { background: #e65100; }
+
+.acfun-author-toolbar .acfun-btn-unblock {
+  background: #2e7d32;
+  color: #fff;
+}
+
+.acfun-author-toolbar .acfun-btn-unblock:hover { background: #1b5e20; }
+
+.acfun-author-toolbar .acfun-btn-status {
+  background: #455a64;
+  color: #fff;
+  font-size: 11px;
+}
+
+/* 悬停浮动工具栏 */
+.acfun-hover-toolbar {
+  position: fixed;
+  z-index: 2147483647;
+  min-width: 220px;
+  max-width: 280px;
+  background: #1f1f23;
+  color: #f3f4f6;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  padding: 10px 12px;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  font-size: 13px;
+  display: none;
+  user-select: none;
+  animation: acfun-toolbar-in 0.12s ease-out;
+}
+
+.acfun-hover-toolbar.show { display: block; }
+
+@keyframes acfun-toolbar-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.acfun-hover-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.acfun-hover-uid {
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-weight: 600;
+  font-size: 12px;
+  color: #fff;
+}
+
+.acfun-hover-tag {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 8px;
+  font-weight: 600;
+  margin-left: auto;
+}
+.acfun-hover-tag.is-blocked { background: rgba(198, 40, 40, 0.85); color: #fff; }
+.acfun-hover-tag.is-marked { background: rgba(239, 108, 0, 0.85); color: #fff; }
+
+.acfun-hover-note {
+  font-size: 11px;
+  color: #9ca3af;
+  margin-bottom: 8px;
+  padding: 4px 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 3px;
+  word-break: break-all;
+}
+
+.acfun-hover-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.acfun-hover-actions button,
+.acfun-hover-actions a {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 10px;
+  font-size: 12px;
+  line-height: 18px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-align: center;
+  text-decoration: none;
+  font-family: inherit;
+  transition: filter 0.12s, transform 0.06s;
+  white-space: nowrap;
+}
+
+.acfun-hover-actions button:active,
+.acfun-hover-actions a:active { transform: scale(0.96); }
+.acfun-hover-actions button:hover,
+.acfun-hover-actions a:hover { filter: brightness(1.1); }
+
+.acfun-btn-block { background: #c62828; color: #fff; }
+.acfun-btn-unblock { background: #2e7d32; color: #fff; }
+.acfun-btn-mark { background: #ef6c00; color: #fff; }
+.acfun-btn-unmark { background: #6b7280; color: #fff; }
+.acfun-btn-profile { background: rgba(255, 255, 255, 0.08); color: #d1d5db; border-color: rgba(255, 255, 255, 0.12) !important; }
+
+/* 被屏蔽文章占位（详情页） */
+.acfun-blocked-article-placeholder {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+}
+
+.acfun-blocked-card {
+  background: #fff;
+  color: #1a1a1a;
+  border-radius: 12px;
+  padding: 32px 28px;
+  max-width: 420px;
+  width: 100%;
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+@media (prefers-color-scheme: dark) {
+  .acfun-blocked-card {
+    background: #1f1f23;
+    color: #f3f4f6;
+  }
+}
+
+.acfun-blocked-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+}
+
+.acfun-blocked-card h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.acfun-blocked-card p {
+  margin: 8px 0;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.acfun-blocked-card code {
+  background: rgba(0, 0, 0, 0.08);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  color: inherit;
+}
+
+@media (prefers-color-scheme: dark) {
+  .acfun-blocked-card code {
+    background: rgba(255, 255, 255, 0.1);
+  }
+}
+
+.acfun-blocked-note {
+  font-size: 12px;
+  color: #6b7280;
+  background: rgba(0, 0, 0, 0.04);
+  padding: 6px 10px;
+  border-radius: 4px;
+  margin: 12px 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .acfun-blocked-note { background: rgba(255, 255, 255, 0.06); }
+}
+
+.acfun-blocked-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.acfun-blocked-actions button {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.12s;
+}
+
+.acfun-blocked-actions .acfun-btn-unblock { background: #2e7d32; color: #fff; }
+.acfun-blocked-actions .acfun-btn-unblock:hover { background: #1b5e20; }
+
+.acfun-blocked-actions .acfun-btn-ghost {
+  background: transparent;
+  color: #6b7280;
+  border-color: #d1d5db;
+}
+.acfun-blocked-actions .acfun-btn-ghost:hover { background: rgba(0,0,0,0.05); color: #1a1a1a; }
+
+@media (prefers-color-scheme: dark) {
+  .acfun-blocked-actions .acfun-btn-ghost { border-color: #4b5563; color: #d1d5db; }
+  .acfun-blocked-actions .acfun-btn-ghost:hover { background: rgba(255,255,255,0.05); color: #fff; }
+}
+
+/* 浮动信息徽章 - popup 提醒 */
+.acfun-floating-tip {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 2147483647;
+  background: #323232;
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  animation: acfun-tip-in 0.25s ease;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.acfun-floating-tip.is-success { background: #2e7d32; }
+.acfun-floating-tip.is-error { background: #c62828; }
+
+@keyframes acfun-tip-in {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}

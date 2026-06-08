@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>AcFun 文章区助手 - 选项</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>AcFun 文章区助手</h1>
+      <p class="sub">管理屏蔽 / 关注名单与显示设置</p>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab active" data-tab="block">屏蔽名单 <span class="badge" id="tabBlockBadge">0</span></button>
+      <button class="tab" data-tab="mark">关注名单 <span class="badge" id="tabMarkBadge">0</span></button>
+      <button class="tab" data-tab="settings">显示设置</button>
+      <button class="tab" data-tab="data">导入 / 导出</button>
+    </nav>
+
+    <!-- 屏蔽名单 -->
+    <section class="panel active" data-panel="block">
+      <div class="toolbar">
+        <input type="text" id="blockSearch" placeholder="搜索 UID 或备注…">
+        <button id="blockAddBtn" class="primary">+ 添加</button>
+        <button id="blockClearBtn" class="danger">清空</button>
+      </div>
+      <div class="bulk-add">
+        <textarea id="blockBulkInput" placeholder="批量添加：每行一个 UID（可附 备注:UID 格式）&#10;123456&#10;789012:此人刷屏"></textarea>
+        <div class="bulk-actions">
+          <button id="blockBulkBtn" class="primary">批量添加</button>
+        </div>
+      </div>
+      <div class="list" id="blockList">
+        <div class="empty">暂无屏蔽用户</div>
+      </div>
+    </section>
+
+    <!-- 关注名单 -->
+    <section class="panel" data-panel="mark">
+      <div class="toolbar">
+        <input type="text" id="markSearch" placeholder="搜索 UID 或备注…">
+        <button id="markAddBtn" class="primary">+ 添加</button>
+        <button id="markClearBtn" class="danger">清空</button>
+      </div>
+      <div class="bulk-add">
+        <textarea id="markBulkInput" placeholder="批量添加：每行一个 UID&#10;123456"></textarea>
+        <div class="bulk-actions">
+          <button id="markBulkBtn" class="primary">批量添加</button>
+        </div>
+      </div>
+      <div class="list" id="markList">
+        <div class="empty">暂无关注用户</div>
+      </div>
+    </section>
+
+    <!-- 设置 -->
+    <section class="panel" data-panel="settings">
+      <div class="form-row">
+        <label class="row-label">启用扩展</label>
+        <label class="switch">
+          <input type="checkbox" id="setEnabled">
+          <span class="slider"></span>
+        </label>
+        <span class="row-hint">停用时不会处理任何内容，但名单仍保留</span>
+      </div>
+
+      <div class="form-row">
+        <label class="row-label">屏蔽方式</label>
+        <div class="radio-group">
+          <label><input type="radio" name="blockMode" value="hide"> 完全隐藏</label>
+          <label><input type="radio" name="blockMode" value="collapse"> 折叠为占位</label>
+          <label><input type="radio" name="blockMode" value="dim"> 变灰/弱化</label>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <label class="row-label">关注样式</label>
+        <div class="radio-group">
+          <label><input type="radio" name="markStyle" value="highlight"> 背景高亮</label>
+          <label><input type="radio" name="markStyle" value="border"> 边框标记</label>
+          <label><input type="radio" name="markStyle" value="badge"> 角标</label>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <label class="row-label">关注颜色</label>
+        <input type="color" id="setMarkColor">
+        <span class="row-hint">用于背景高亮 / 边框</span>
+      </div>
+
+      <div class="form-row">
+        <label class="row-label">处理评论区</label>
+        <label class="switch">
+          <input type="checkbox" id="setProcessComments">
+          <span class="slider"></span>
+        </label>
+        <span class="row-hint">文章详情页的评论也会被屏蔽/标记</span>
+      </div>
+
+      <div class="form-row">
+        <label class="row-label">显示快捷按钮</label>
+        <label class="switch">
+          <input type="checkbox" id="setShowQuickButton">
+          <span class="slider"></span>
+        </label>
+        <span class="row-hint">文章卡片上悬停出现「屏蔽 / 关注」按钮</span>
+      </div>
+    </section>
+
+    <!-- 导入 / 导出 -->
+    <section class="panel" data-panel="data">
+      <h2>导出</h2>
+      <p class="hint">将所有名单和备注导出为 JSON 或纯文本，方便备份或在不同浏览器间同步。</p>
+      <div class="data-actions">
+        <button id="exportJsonBtn" class="primary">导出为 JSON</button>
+        <button id="exportTextBtn">导出为纯文本</button>
+        <button id="copyExportBtn" class="ghost">复制到剪贴板</button>
+      </div>
+      <textarea id="exportOutput" readonly placeholder="导出内容将显示在这里"></textarea>
+
+      <h2>导入</h2>
+      <p class="hint">支持 JSON 格式或纯文本（每行一个 UID，「UID:备注」形式可写入备注）。</p>
+      <div class="data-actions">
+        <label class="file-btn">
+          选择文件
+          <input type="file" id="importFile" accept=".json,.txt" hidden>
+        </label>
+        <select id="importMode">
+          <option value="merge">合并（推荐）</option>
+          <option value="replace">替换（清空现有）</option>
+        </select>
+        <button id="importTextBtn" class="primary">导入下面文本</button>
+      </div>
+      <textarea id="importInput" placeholder="在此粘贴 JSON 或纯文本…"></textarea>
+      <div id="importStatus" class="status-line"></div>
+    </section>
+  </div>
+
+  <!-- 添加/编辑用户对话框 -->
+  <div class="modal" id="modal" hidden>
+    <div class="modal-content">
+      <h3 id="modalTitle">添加用户</h3>
+      <div class="form-row">
+        <label class="row-label">UID</label>
+        <input type="text" id="modalUid" placeholder="用户 UID 或主页链接">
+      </div>
+      <div class="form-row">
+        <label class="row-label">备注</label>
+        <input type="text" id="modalNote" placeholder="可选，例如：内容质量差 / 关注的作者">
+      </div>
+      <div class="modal-actions">
+        <button id="modalCancelBtn" class="ghost">取消</button>
+        <button id="modalOkBtn" class="primary">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="../shared/storage.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

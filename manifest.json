@@ -1,0 +1,65 @@
+{
+  "manifest_version": 3,
+  "name": "AcFun 文章区助手",
+  "version": "1.0.0",
+  "description": "在 AcFun 文章区（/v/as*）识别、屏蔽或标记特定 UID 发布的内容，提升浏览体验",
+  "author": "you",
+  "minimum_chrome_version": "100",
+
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+
+  "host_permissions": [
+    "*://www.acfun.cn/*",
+    "*://acfun.cn/*"
+  ],
+
+  "background": {
+    "service_worker": "src/background/service-worker.js"
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "*://www.acfun.cn/v/as*",
+        "*://www.acfun.cn/",
+        "*://www.acfun.cn/?*"
+      ],
+      "js": [
+        "src/shared/storage.js",
+        "src/content/content.js"
+      ],
+      "css": [
+        "src/content/content.css"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+
+  "action": {
+    "default_title": "AcFun 文章区助手",
+    "default_popup": "src/popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+
+  "options_ui": {
+    "page": "src/options/options.html",
+    "open_in_tab": true
+  },
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

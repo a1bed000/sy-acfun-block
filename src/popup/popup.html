@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>AcFun 文章区助手</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="top">
+    <div class="title">AcFun 文章区助手</div>
+    <label class="switch" title="启用 / 停用">
+      <input type="checkbox" id="enabled">
+      <span class="slider"></span>
+    </label>
+  </header>
+
+  <section class="stats">
+    <div class="stat">
+      <div class="stat-num" id="blockCount">0</div>
+      <div class="stat-label">屏蔽</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" id="markCount">0</div>
+      <div class="stat-label">关注</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" id="pageCount">0</div>
+      <div class="stat-label">本页作者</div>
+    </div>
+  </section>
+
+  <section class="block" id="pageInfoSection">
+    <div class="block-title">当前页面</div>
+    <div class="page-url" id="pageUrl">—</div>
+  </section>
+
+  <section class="block" id="addSection">
+    <div class="block-title">添加 UID</div>
+    <form id="addForm" class="add-form">
+      <input type="text" id="addUid" placeholder="输入 UID 或粘贴用户主页链接" autocomplete="off">
+      <button type="submit">添加屏蔽</button>
+    </form>
+    <div class="row-btns">
+      <button id="addMarkBtn" class="ghost" type="button">添加到关注</button>
+    </div>
+  </section>
+
+  <section class="block" id="pageUsersSection">
+    <div class="block-title">本页检测到的作者 UID</div>
+    <div id="pageUsers" class="user-list">
+      <div class="empty">未检测到（可能不在文章区页面）</div>
+    </div>
+  </section>
+
+  <section class="block" id="quickBlockSection">
+    <div class="block-title">快捷操作</div>
+    <div class="row-btns">
+      <button id="refreshBtn" type="button" class="ghost">刷新本页</button>
+      <button id="optionsBtn" type="button" class="ghost">管理名单</button>
+    </div>
+  </section>
+
+  <footer>
+    <span class="hint">v1.0 · 仅作用于 acfun.cn</span>
+  </footer>
+
+  <script src="../shared/storage.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
