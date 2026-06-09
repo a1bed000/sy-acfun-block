@@ -154,5 +154,17 @@ AcFun 前端会更新。如果卡片识别或 UID 提取失效，编辑 `src/con
 
 ---
 
-**版本**: 1.0.0  
-**Manifest**: V3
+## 变更日志
+
+### v1.0.1
+- content script 改用**增量扫描**：MutationObserver 仅处理新增节点，不再每 250ms 全量重扫
+- 已处理元素用 WeakSet 记录，`unprocessAll` 整体替换实现 reset
+- storage 暴露 `extractUid`、`bulkAddToBlock/Mark`、`clearBlock/Mark`，options 批量清空 / 批量添加从 N 次 IO 降为 1 次
+- manifest 权限精简：移除未使用的 `scripting`、`activeTab`，移除 `acfun.cn` 冗余 host
+- service worker：补 `lastError` 处理、storage 兼容 `globalThis` / `self`、listener 异常隔离
+- popup 订阅 `onChange` 后自动重渲染；删除重复的 `extractUid` 实现
+
+### v1.0.0
+- 初始版本
+
+---

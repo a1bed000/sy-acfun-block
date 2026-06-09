@@ -8,15 +8,6 @@
   let cfg = null;
 
   /* 工具 */
-  function extractUid(text) {
-    if (!text) return null;
-    text = String(text).trim();
-    const m = text.match(/\/(?:u|user)\/(\d+)/);
-    if (m) return m[1];
-    if (/^\d{1,20}$/.test(text)) return text;
-    return null;
-  }
-
   function showImportStatus(msg, ok) {
     const el = $('importStatus');
     el.className = 'status-line ' + (ok ? 'ok' : 'err');
@@ -136,17 +127,15 @@
   $('markAddBtn').addEventListener('click', () => openModal('mark'));
 
   $('blockClearBtn').addEventListener('click', async () => {
+    if (!cfg.blockList.length) return;
     if (!confirm('确定清空所有屏蔽用户？此操作不可撤销。')) return;
-    for (const uid of [...cfg.blockList]) {
-      await AcFunBlockStorage.removeFromBlock(uid);
-    }
+    await AcFunBlockStorage.clearBlock();
     await reload();
   });
   $('markClearBtn').addEventListener('click', async () => {
+    if (!cfg.markList.length) return;
     if (!confirm('确定清空所有关注用户？此操作不可撤销。')) return;
-    for (const uid of [...cfg.markList]) {
-      await AcFunBlockStorage.removeFromMark(uid);
-    }
+    await AcFunBlockStorage.clearMark();
     await reload();
   });
 
@@ -154,27 +143,31 @@
   $('blockSearch').addEventListener('input', () => renderList('block'));
   $('markSearch').addEventListener('input', () => renderList('mark'));
 
-  /* 批量添加 */
+  /* 批量添加（解析后走单次 bulkAddToBlock / bulkAddToMark IO） */
+  function parseBulkLine(line) {
+    // 支持 "UID:备注" / "UID 备注" / "链接 备注"
+    const m1 = line.match(/^(\d{1,20})\s*[:：]\s*(.+)$/);
+    if (m1) return { uid: m1[1], note: m1[2].trim() };
+    const m3 = line.match(/\/(?:u|user)\/(\d+)(?:\s*[:：]?\s*(.+))?$/);
+    if (m3) return { uid: m3[1], note: m3[2] ? m3[2].trim() : null };
+    const m2 = line.match(/^(\d{1,20})(?:\s+(.+))?$/);
+    if (m2) return { uid: m2[1], note: m2[2] ? m2[2].trim() : null };
+    return null;
+  }
+
   async function bulkAdd(type, text) {
     const lines = text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    let added = 0, skipped = 0;
+    const items = [];
+    let skipped = 0;
     for (const line of lines) {
-      // 支持 "UID:备注" 或 "UID 备注" 格式
-      const m1 = line.match(/^(\d{1,20})\s*[:：]\s*(.+)$/);
-      const m2 = line.match(/^(\d{1,20})(?:\s+(.+))?$/);
-      const m3 = line.match(/\/(?:u|user)\/(\d+)(?:\s*[:：]?\s*(.+))?$/);
-
-      let uid = null, note = null;
-      if (m1) { uid = m1[1]; note = m1[2].trim(); }
-      else if (m3) { uid = m3[1]; note = m3[2] ? m3[2].trim() : null; }
-      else if (m2) { uid = m2[1]; note = m2[2] ? m2[2].trim() : null; }
-
-      if (!uid) { skipped++; continue; }
-      if (type === 'block') await AcFunBlockStorage.addToBlock(uid, note);
-      else await AcFunBlockStorage.addToMark(uid, note);
-      added++;
+      const parsed = parseBulkLine(line);
+      if (!parsed) { skipped++; continue; }
+      items.push(parsed);
     }
-    return { added, skipped };
+    if (!items.length) return { added: 0, skipped };
+    if (type === 'block') await AcFunBlockStorage.bulkAddToBlock(items);
+    else await AcFunBlockStorage.bulkAddToMark(items);
+    return { added: items.length, skipped };
   }
 
   $('blockBulkBtn').addEventListener('click', async (e) => {
@@ -225,7 +218,7 @@
   $('modalCancelBtn').addEventListener('click', closeModal);
   $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
   $('modalOkBtn').addEventListener('click', async () => {
-    const uid = extractUid($('modalUid').value);
+    const uid = AcFunBlockStorage.extractUid($('modalUid').value);
     if (!uid) { alert('请输入有效的 UID 或用户主页链接'); return; }
     const note = $('modalNote').value.trim();
     if (modalMode === 'block') await AcFunBlockStorage.addToBlock(uid, note);
@@ -268,53 +261,58 @@
       setStatus($('copyExportBtn'), '已复制');
     } catch (e) {
       $('exportOutput').select();
-      document.execCommand('copy');
+      try { document.execCommand('copy'); } catch (_) {}
       setStatus($('copyExportBtn'), '已复制');
     }
   });
 
   $('importFile').addEventListener('change', async (e) => {
-    const file = e.target.files[0];
+    const file = e.target.files && e.target.files[0];
     if (!file) return;
-    const text = await file.text();
-    $('importInput').value = text;
+    try {
+      const text = await file.text();
+      $('importInput').value = text;
+    } catch (err) {
+      showImportStatus('读取文件失败：' + err.message, false);
+    }
   });
+
+  function parseImportText(text) {
+    const data = { blockList: [], markList: [], notes: {} };
+    let section = null;
+    for (const raw of text.split(/\r?\n/)) {
+      const t = raw.trim();
+      if (!t) continue;
+      if (t.startsWith('#')) {
+        if (/^#\s*屏蔽/.test(t)) section = 'block';
+        else if (/^#\s*关注/.test(t)) section = 'mark';
+        else section = null;
+        continue;
+      }
+      const parsed = parseBulkLine(t);
+      if (!parsed) continue;
+      if (section === 'block') data.blockList.push(parsed.uid);
+      else if (section === 'mark') data.markList.push(parsed.uid);
+      else data.blockList.push(parsed.uid);  // 无 section 时默认屏蔽
+      if (parsed.note) data.notes[parsed.uid] = parsed.note;
+    }
+    return data;
+  }
 
   $('importTextBtn').addEventListener('click', async () => {
     const text = $('importInput').value.trim();
     if (!text) { showImportStatus('请输入或选择要导入的内容', false); return; }
     const mode = $('importMode').value;
     try {
-      // 先尝试 JSON
+      let data;
       if (text.startsWith('{')) {
-        const data = JSON.parse(text);
-        await AcFunBlockStorage.importAll(data, mode);
-        showImportStatus(`已${mode === 'replace' ? '替换' : '合并'}导入（JSON 格式）`, true);
+        data = JSON.parse(text);
       } else {
-        // 解析纯文本
-        const data = { blockList: [], markList: [], notes: {} };
-        let section = null;
-        for (const line of text.split(/\r?\n/)) {
-          const t = line.trim();
-          if (!t) continue;
-          if (t.startsWith('# 屏蔽') || t.startsWith('# 屏蔽名单')) { section = 'block'; continue; }
-          if (t.startsWith('# 关注') || t.startsWith('# 关注名单')) { section = 'mark'; continue; }
-          if (t.startsWith('#')) { section = null; continue; }
-
-          const m1 = t.match(/^(\d{1,20})\s*[:：]\s*(.+)$/);
-          const m2 = t.match(/^(\d{1,20})$/);
-          let uid = null, note = null;
-          if (m1) { uid = m1[1]; note = m1[2].trim(); }
-          else if (m2) { uid = m2[1]; }
-          if (!uid) continue;
-          if (section === 'block') data.blockList.push(uid);
-          else if (section === 'mark') data.markList.push(uid);
-          else data.blockList.push(uid);  // 无 section 时默认屏蔽
-          if (note) data.notes[uid] = note;
-        }
-        await AcFunBlockStorage.importAll(data, mode);
-        showImportStatus(`已${mode === 'replace' ? '替换' : '合并'}导入（文本格式）`, true);
+        data = parseImportText(text);
       }
+      if (!data || typeof data !== 'object') throw new Error('解析结果为空');
+      await AcFunBlockStorage.importAll(data, mode);
+      showImportStatus(`已${mode === 'replace' ? '替换' : '合并'}导入`, true);
       $('importInput').value = '';
       await reload();
     } catch (err) {

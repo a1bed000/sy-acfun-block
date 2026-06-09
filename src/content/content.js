@@ -1,5 +1,11 @@
 /* AcFun 文章区助手 - content script
  * 负责：扫描文章列表/详情/评论，识别 UID，应用屏蔽/标记规则
+ *
+ * 性能策略：
+ *   - 首次 / config 变更：全量扫描
+ *   - MutationObserver 触发：仅处理新增节点中的 article links / comment items
+ *   - 用 WeakSet 记录已处理元素，unprocessAll 时整体替换（WeakSet 不可 clear）
+ *   - 按 card 去重，避免同一卡片内的多个 article link 抢处理
  */
 (function () {
   'use strict';
@@ -13,6 +19,19 @@
   let config = null;
   let observer = null;
   let debounceTimer = null;
+
+  // 已处理元素集合（WeakSet 不可 clear，通过"重新创建 + 切换引用"达到重置效果）
+  let processedCards = new WeakSet();
+  let processedComments = new WeakSet();
+  let processedDetail = null;            // 详情页正文节点
+  let processedPlaceholder = null;       // 当前占位卡片的 uid（防重复插入）
+
+  function resetProcessedSets() {
+    processedCards = new WeakSet();
+    processedComments = new WeakSet();
+    processedDetail = null;
+    processedPlaceholder = null;
+  }
 
   /* ============================================================
    * 工具函数
@@ -43,7 +62,18 @@
    * 容器识别
    * ============================================================ */
   function findCardContainer(articleLink) {
-    // 优先找 li / article / 含特定 class 的祖先
+    // 优先看自己是否是容器节点
+    if (articleLink) {
+      const ownCls = (articleLink.className && typeof articleLink.className === 'string') ? articleLink.className : '';
+      if (
+        articleLink.tagName === 'LI' ||
+        articleLink.tagName === 'ARTICLE' ||
+        /article|feed|card|item|post|list-item|FeedItem|ArticleItem|article-item/i.test(ownCls)
+      ) {
+        return articleLink;
+      }
+    }
+    // 向上找祖先
     let el = articleLink;
     for (let i = 0; i < 6 && el && el !== document.body; i++) {
       el = el.parentElement;
@@ -57,7 +87,7 @@
         return el;
       }
     }
-    return articleLink.parentElement || articleLink;
+    return articleLink ? (articleLink.parentElement || articleLink) : null;
   }
 
   function findAuthorInContainer(container) {
@@ -94,23 +124,28 @@
     return null;
   }
 
+  // 从单个节点向上找 comment 容器（单点版本，给增量扫描用）
+  function findCommentContainerFor(link) {
+    if (!USER_LINK_RE.test(link.href)) return null;
+    let el = link;
+    for (let i = 0; i < 8 && el && el !== document.body; i++) {
+      el = el.parentElement;
+      if (!el) break;
+      const cls = (el.className && typeof el.className === 'string') ? el.className : '';
+      if (COMMENT_HINT_RE.test(cls) || el.tagName === 'LI' && /comment/i.test(cls)) {
+        return el;
+      }
+    }
+    return null;
+  }
+
+  // 全量扫描评论区用
   function findCommentItems() {
-    // 评论区里：找包含用户链接、且父级含 comment 关键字的元素
     const out = [];
     const allLinks = document.querySelectorAll('a[href*="/u/"]');
     for (const link of allLinks) {
-      if (!USER_LINK_RE.test(link.href)) continue;
-      // 向上找包含 comment 关键字的祖先
-      let el = link;
-      for (let i = 0; i < 8 && el && el !== document.body; i++) {
-        el = el.parentElement;
-        if (!el) break;
-        const cls = (el.className && typeof el.className === 'string') ? el.className : '';
-        if (COMMENT_HINT_RE.test(cls) || el.tagName === 'LI' && /comment/i.test(cls)) {
-          out.push({ el, authorLink: link });
-          break;
-        }
-      }
+      const c = findCommentContainerFor(link);
+      if (c) out.push({ el: c, authorLink: link });
     }
     return out;
   }
@@ -468,7 +503,14 @@
    * 详情页：被屏蔽文章时显示占位
    * ============================================================ */
   function showBlockedArticlePlaceholder(uid) {
-    if (document.querySelector('.acfun-blocked-article-placeholder')) return;
+    if (processedPlaceholder === uid && document.querySelector('.acfun-blocked-article-placeholder')) {
+      return;
+    }
+
+    // 移除可能残留的旧占位（处理切换 uid 场景）
+    document.querySelectorAll('.acfun-blocked-article-placeholder').forEach(el => el.remove());
+
+    processedPlaceholder = uid;
 
     const ph = document.createElement('div');
     ph.className = 'acfun-blocked-article-placeholder';
@@ -534,13 +576,64 @@
   }
 
   /* ============================================================
-   * 主流程
+   * 处理（核心）
    * ============================================================ */
-  function unprocessAll() {
-    document.querySelectorAll('[data-acfun-block-processed]').forEach(clearMarks);
-    document.querySelectorAll('.acfun-blocked-article-placeholder').forEach(el => el.remove());
+  function processCardEl(card) {
+    if (!card || processedCards.has(card)) return;
+    const authorLink = findAuthorInContainer(card);
+    if (!authorLink) return;
+    const uid = extractUid(authorLink.href);
+    if (!uid) return;
+    processedCards.add(card);
+    processItem(card, uid, authorLink);
   }
 
+  function processCommentEl(commentEl, authorLink) {
+    if (!commentEl || processedComments.has(commentEl)) return;
+    const uid = extractUid(authorLink.href);
+    if (!uid) return;
+    processedComments.add(commentEl);
+    processItem(commentEl, uid, authorLink);
+  }
+
+  function processArticleLinksIn(root, seenCards) {
+    if (!root || !root.querySelectorAll) return;
+    const articleLinks = root.querySelectorAll('a[href*="/v/as"]');
+    articleLinks.forEach(articleLink => {
+      if (!ARTICLE_LINK_RE.test(articleLink.href)) return;
+      const card = findCardContainer(articleLink);
+      if (!card) return;
+      if (seenCards.has(card)) return;
+      seenCards.add(card);
+      processCardEl(card);
+    });
+  }
+
+  function processUserLinksIn(root) {
+    if (!root || !root.querySelectorAll) return;
+    const userLinks = root.querySelectorAll('a[href*="/u/"]');
+    userLinks.forEach(link => {
+      const commentContainer = findCommentContainerFor(link);
+      if (commentContainer) processCommentEl(commentContainer, link);
+    });
+  }
+
+  function processDetailOnce() {
+    if (!isOnArticleDetail()) return;
+    const detail = findDetailContainer();
+    if (!detail || detail === processedDetail) return;
+    processedDetail = detail;
+    const authorLink = findAuthorInContainer(detail);
+    if (!authorLink) return;
+    const uid = extractUid(authorLink.href);
+    if (!uid) return;
+    processItem(detail, uid, authorLink);
+    if (config.blockList.includes(uid)) {
+      try { showBlockedArticlePlaceholder(uid); } catch (e) { console.warn('[AcFunBlock] placeholder', e); }
+    }
+  }
+
+  // 全量扫描
   function processPage() {
     if (!config || !config.enabled) {
       unprocessAll();
@@ -548,61 +641,66 @@
     }
 
     // 1. 文章卡片（列表）
-    const articleLinks = document.querySelectorAll('a[href*="/v/as"]');
-    const seen = new WeakSet();
-    articleLinks.forEach(articleLink => {
-      const articleMatch = articleLink.href.match(ARTICLE_LINK_RE);
-      if (!articleMatch) return;
-      const card = findCardContainer(articleLink);
-      if (!card || seen.has(card)) return;
-      seen.add(card);
-      const authorLink = findAuthorInContainer(card);
-      if (!authorLink) return;
-      const uid = extractUid(authorLink.href);
-      if (!uid) return;
-      processItem(card, uid, authorLink);
-    });
+    const seenCards = new Set();
+    processArticleLinksIn(document, seenCards);
 
     // 2. 文章详情页主体
-    if (isOnArticleDetail()) {
-      const detail = findDetailContainer();
-      if (detail) {
-        // 详情页的作者链接可能就在 article 内部
-        const authorLink = findAuthorInContainer(detail);
-        if (authorLink) {
-          const uid = extractUid(authorLink.href);
-          if (uid) {
-            processItem(detail, uid, authorLink);
-            // 如果作者被屏蔽，显示占位说明
-            if (config.blockList.includes(uid)) {
-              try { showBlockedArticlePlaceholder(uid); } catch (e) { console.warn('[AcFunBlock] placeholder', e); }
-            }
-          }
-        }
-      }
-    }
+    processDetailOnce();
 
     // 3. 评论区
     if (config.processComments) {
-      const comments = findCommentItems();
-      comments.forEach(({ el, authorLink }) => {
-        const uid = extractUid(authorLink.href);
-        if (!uid) return;
-        if (el.dataset.acfunBlockProcessed) return;
-        processItem(el, uid, authorLink);
-      });
+      processUserLinksIn(document);
     }
   }
 
+  // 增量扫描：仅处理新增节点（避免 250ms 全量重扫）
+  function processIncremental(mutations) {
+    if (!config || !config.enabled) return;
+    const seenCards = new Set();
+    for (const m of mutations) {
+      if (m.type !== 'childList' || !m.addedNodes || !m.addedNodes.length) continue;
+      for (const node of m.addedNodes) {
+        if (node.nodeType !== 1) continue; // 只处理元素
+        if (node.tagName === 'A' && node.href) {
+          if (ARTICLE_LINK_RE.test(node.href)) {
+            const card = findCardContainer(node);
+            if (card && !seenCards.has(card)) {
+              seenCards.add(card);
+              processCardEl(card);
+            }
+          }
+          if (config.processComments && USER_LINK_RE.test(node.href)) {
+            const commentContainer = findCommentContainerFor(node);
+            if (commentContainer) processCommentEl(commentContainer, node);
+          }
+        } else {
+          processArticleLinksIn(node, seenCards);
+          if (config.processComments) processUserLinksIn(node);
+        }
+      }
+    }
+    // 详情页主体可能被替换（路由切换 SPA）
+    if (isOnArticleDetail()) processDetailOnce();
+  }
+
+  /* ============================================================
+   * 清理
+   * ============================================================ */
+  function unprocessAll() {
+    document.querySelectorAll('[data-acfun-block-processed]').forEach(clearMarks);
+    document.querySelectorAll('.acfun-blocked-article-placeholder').forEach(el => el.remove());
+    resetProcessedSets();
+  }
+
+  /* ============================================================
+   * 主流程
+   * ============================================================ */
   function setupObserver() {
     if (observer) observer.disconnect();
-    observer = new MutationObserver(() => {
+    observer = new MutationObserver((mutations) => {
+      if (!config || !config.enabled) return;
       if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        if (config && config.enabled) {
-          processPage();
-        }
-      }, 250);
+      debounceTimer = setTimeout(() => processIncremental(mutations), 250);
     });
     observer.observe(document.body, {
       childList: true,
@@ -633,12 +731,16 @@
       if (!msg || !msg.type) return;
       if (msg.type === 'ACFUN_BLOCK_REFRESH') {
         (async () => {
-          config = await AcFunBlockStorage.loadConfig();
-          unprocessAll();
-          processPage();
-          // 关闭可能还显示的悬停工具栏
-          hideHoverToolbar();
-          sendResponse({ ok: true });
+          try {
+            config = await AcFunBlockStorage.loadConfig();
+            unprocessAll();
+            processPage();
+            // 关闭可能还显示的悬停工具栏
+            hideHoverToolbar();
+            sendResponse({ ok: true });
+          } catch (e) {
+            sendResponse({ ok: false, error: String(e) });
+          }
         })();
         return true;
       }
