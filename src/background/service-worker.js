@@ -26,9 +26,14 @@ async function refreshBadge() {
 }
 
 function safeListener(fn) {
-  // 包装一层：吃掉单个 listener 抛错
+  // 包装一层：吃掉单个 listener 抛错；同时必须透传 return 值，
+  // 否则 onMessage 的异步 return true 会被吞掉，导致 sendResponse 通道被关闭。
   return (...args) => {
-    try { fn(...args); } catch (e) { console.error('[AcFunBlock] listener error', e); }
+    try {
+      return fn(...args);
+    } catch (e) {
+      console.error('[AcFunBlock] listener error', e);
+    }
   };
 }
 

@@ -95,12 +95,13 @@
     try {
       chrome.runtime.sendMessage({ type: 'ACFUN_BLOCK_GET_TAB_INFO' }, (resp) => {
         if (chrome.runtime.lastError) {
-          pageUrlEl.textContent = '（无法读取当前页面）';
+          pageUrlEl.textContent = '（无法读取当前页面：' + chrome.runtime.lastError.message + '）';
           renderPageUsers([], cfg);
           return;
         }
         if (!resp || !resp.ok) {
-          pageUrlEl.textContent = '（无法读取当前页面，可能不是 acfun.cn）';
+          const err = (resp && resp.error) || '未知错误';
+          pageUrlEl.textContent = '（无法读取当前页面：' + err + '）';
           renderPageUsers([], cfg);
           return;
         }
