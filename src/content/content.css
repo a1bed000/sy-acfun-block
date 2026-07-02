@@ -1,7 +1,20 @@
 /* AcFun 文章区助手 - 注入到 acfun.cn 的样式 */
 
+/* hide 模式：必须在 DOM 流中保留占位，否则破坏 AcFun 列表页的
+ * flex/grid 布局（第一个子元素消失会导致整页渲染异常）。
+ * 改用零高度 + 透明，元素仍然占一格但不破坏布局。 */
 .acfun-block-hidden {
-  display: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  max-height: 0 !important;
+  overflow: hidden !important;
+  opacity: 0 !important;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  border: none !important;
+  pointer-events: none !important;
 }
 
 .acfun-block-collapsed {
