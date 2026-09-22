@@ -1,6 +1,6 @@
 # AcFun 文章区助手
 
-Chrome / Edge 扩展（MV3）。在 AcFun 文章区（`/v/as*`）和首页信息流中识别作者 UID，**屏蔽**或**标记**特定用户的内容，提升浏览体验。
+Chrome / Edge 扩展（MV3）。在 AcFun 文章频道 / 列表 / 详情页（`/v/as*`、`/v/list*`、`/a/ac*`）和首页信息流中识别作者 UID，**屏蔽**或**标记**特定用户的内容，提升浏览体验。
 
 ---
 
@@ -86,10 +86,13 @@ Chrome / Edge 扩展（MV3）。在 AcFun 文章区（`/v/as*`）和首页信息
 
 ## 适用页面
 
-- `https://www.acfun.cn/v/as*` — 文章详情
+- `https://www.acfun.cn/v/as*` — 文章频道页（例如 `/v/as7` 情感），按卡片屏蔽文章
+- `https://www.acfun.cn/v/list*/index.htm` — 文章列表页，按卡片屏蔽文章
+- `https://www.acfun.cn/a/ac*` — 文章详情页（例如 `/a/ac10696686`），整篇隐藏并显示占位
 - `https://www.acfun.cn/` — 首页信息流
 - 文章详情页的评论区
 
+> 注意：`/v/as7` 这类 `/v/as*` 地址是**频道页**，不是文章详情页；文章详情是 `/a/ac*`。
 > 如果你想让扩展在更多 AcFun 子页生效，编辑 `manifest.json` 里的 `content_scripts.matches` 即可。
 
 ---
@@ -136,10 +139,11 @@ sy.acfunas.block/
 
 AcFun 前端会更新。如果卡片识别或 UID 提取失效，编辑 `src/content/content.js`：
 
-- `findCardContainer(articleLink)` — 卡片容器识别
+- `findCardContainer(articleLink)` — 卡片容器识别（`article-item` / `li` 等）
 - `findAuthorInContainer(container)` — 在容器里找作者链接
+- `findDetailContainer()` — 详情页主体识别（只认 `#article-content` / `.article-up`）
+- `isOnArticleDetail()` — 区分文章详情页（`/a/ac*`）与文章频道页（`/v/as*`）
 - `findCommentItems()` — 评论区识别
-- `findDetailContainer()` — 详情页主体识别
 
 修改保存后，扩展页点「重新加载」+ 刷新 AcFun 即可。
 
@@ -155,6 +159,19 @@ AcFun 前端会更新。如果卡片识别或 UID 提取失效，编辑 `src/con
 ---
 
 ## 变更日志
+
+### v1.0.2
+- **修复：直接访问 `/v/as7` 等文章频道页时误弹「此文章作者已被屏蔽」全屏占位**
+  - 根因：`/v/as*` 被当成文章详情页，`findDetailContainer()` 又用 `<main>` 兜底，导致频道页里第一个作者链接被误判为「当前文章作者」
+  - `isOnArticleDetail()` 改为只认新版详情页 `/a/ac*`，并兼容真正含文章主体的旧版 `/v/as*` 页面
+  - `findDetailContainer()` 移除 `main` / `article` 等宽泛兜底，只匹配 `#article-content`、`.article-up`
+- 文章链接识别从 `/v/as*`（频道链接）改为 `/a/ac*`（真实文章链接），频道页 / 列表页卡片现在能正确按作者屏蔽
+- `manifest.json` 新增 `*://www.acfun.cn/v/list*`、`*://www.acfun.cn/a/ac*` 匹配
+- 详情页不再处理页面内的推荐卡片；作者区延迟渲染时会等待 DOM 变化后重试
+- **修复 MutationObserver 去抖丢事件**：250ms 内的多批新增节点此前只保留最后一批，导致异步加载的评论 / 卡片漏处理；现在会累积全部 mutation 再统一处理
+- `findCardContainer()` 不再因为链接自身的 `item` 类名而把 `<a>` 本身当卡片
+- 修复卡片快捷按钮因 `.article-item` 为 `position: static` 而飘到页面右上角的问题（新增 `.acfun-quick-host`）
+- 普通卡片也会写入 `data-acfun-block-processed`，保证切换配置后 `unprocessAll` 能正确清理并重建按钮状态
 
 ### v1.0.1
 - content script 改用**增量扫描**：MutationObserver 仅处理新增节点，不再每 250ms 全量重扫

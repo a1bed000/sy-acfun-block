@@ -13,12 +13,18 @@
   window.__acfunBlockInjected = true;
 
   const USER_LINK_RE = /\/(?:u|user)\/(\d+)/;
-  const ARTICLE_LINK_RE = /\/v\/as(\d+)/;
+  // 新版文章详情页 URL：https://www.acfun.cn/a/ac12345678
+  const ARTICLE_DETAIL_RE = /^\/a\/ac\d+/;
+  // 站内文章链接（频道页 / 列表页卡片，以及正文里的站内文章链接）
+  const ARTICLE_LINK_RE = /\/a\/ac\d+/;
+  // 旧版 /v/as<id> 详情页兼容（频道页同样命中该前缀，需要用 DOM 进一步区分）
+  const LEGACY_DETAIL_RE = /^\/v\/as\d+/;
   const COMMENT_HINT_RE = /comment|reply|comment-item|commentItem|CommentList|comment-list/i;
 
   let config = null;
   let observer = null;
   let debounceTimer = null;
+  let pendingMutations = [];
 
   // 已处理元素集合（WeakSet 不可 clear，通过"重新创建 + 切换引用"达到重置效果）
   let processedCards = new WeakSet();
@@ -43,7 +49,12 @@
   }
 
   function isOnArticleDetail() {
-    return ARTICLE_LINK_RE.test(location.pathname);
+    if (ARTICLE_DETAIL_RE.test(location.pathname)) return true;
+    // /v/as<id> 是文章频道页（如 /v/as7 情感）；只有旧版详情页才会有文章主体容器
+    if (LEGACY_DETAIL_RE.test(location.pathname)) {
+      return !!document.querySelector('#article-content, #article-up, .article-up');
+    }
+    return false;
   }
 
   function showTip(message, type) {
@@ -61,33 +72,24 @@
   /* ============================================================
    * 容器识别
    * ============================================================ */
+  // 卡片容器特征类名（AcFun 文章卡片：article-item / weblog-item 等）
+  const CARD_HINT_RE = /(?:^|[\s-])(?:article-item|weblog-item|feed-item|item|card)(?:[\s-]|$)/i;
+
   function findCardContainer(articleLink) {
-    // 优先看自己是否是容器节点
-    if (articleLink) {
-      const ownCls = (articleLink.className && typeof articleLink.className === 'string') ? articleLink.className : '';
-      if (
-        articleLink.tagName === 'LI' ||
-        articleLink.tagName === 'ARTICLE' ||
-        /article|feed|card|item|post|list-item|FeedItem|ArticleItem|article-item/i.test(ownCls)
-      ) {
-        return articleLink;
-      }
-    }
-    // 向上找祖先
-    let el = articleLink;
-    for (let i = 0; i < 6 && el && el !== document.body; i++) {
-      el = el.parentElement;
-      if (!el) break;
+    if (!articleLink) return null;
+    // 链接自己就是卡片节点（少数列表直接以 li / article 承载）
+    if (articleLink.tagName === 'LI' || articleLink.tagName === 'ARTICLE') return articleLink;
+
+    // 向上找卡片容器；不要因为链接自身的 "item" 类名而返回链接本身
+    let el = articleLink.parentElement;
+    for (let i = 0; i < 8 && el && el !== document.body; i++) {
       const cls = (el.className && typeof el.className === 'string') ? el.className : '';
-      if (
-        el.tagName === 'LI' ||
-        el.tagName === 'ARTICLE' ||
-        /article|feed|card|item|post|list-item|FeedItem|ArticleItem|article-item/i.test(cls)
-      ) {
+      if (el.tagName === 'LI' || el.tagName === 'ARTICLE' || CARD_HINT_RE.test(cls)) {
         return el;
       }
+      el = el.parentElement;
     }
-    return articleLink ? (articleLink.parentElement || articleLink) : null;
+    return articleLink.parentElement || articleLink;
   }
 
   function findAuthorInContainer(container) {
@@ -103,19 +105,14 @@
   }
 
   function findDetailContainer() {
-    // 文章详情页：找 main/article 容器
+    // 只认文章详情页专属容器，不能用 main 兜底：
+    // /v/as7 这类频道页也有 <main>，会把频道页第一篇文章的作者误判为“当前文章作者”。
     const candidates = [
-      'main article',
-      'main',
-      'article',
-      '[class*="article-container"]',
-      '[class*="ArticleContainer"]',
+      '#article-content',   // section#article-content：作者区 + 正文
+      '#article-up',        // div#article-up：作者区（含正文）
+      '.article-up',
       '[class*="article-detail"]',
-      '[class*="ArticleDetail"]',
-      '[class*="article-body"]',
-      '[class*="ArticleBody"]',
-      '#article-content',
-      '#article'
+      '[class*="ArticleDetail"]'
     ];
     for (const sel of candidates) {
       const el = document.querySelector(sel);
@@ -160,7 +157,8 @@
       'acfun-block-dim',
       'acfun-mark-highlight',
       'acfun-mark-badge',
-      'acfun-mark-border'
+      'acfun-mark-border',
+      'acfun-quick-host'
     );
     el.removeAttribute('data-acfun-block-processed');
     el.removeAttribute('data-acfun-uid');
@@ -200,6 +198,9 @@
     if (!config.showQuickButton) return;
     if (el.querySelector(':scope > .acfun-quick-action')) return;
 
+    // 让绝对定位的快捷按钮以卡片为参照
+    el.classList.add('acfun-quick-host');
+
     const inBlock = config.blockList.includes(uid);
     const inMark = config.markList.includes(uid);
 
@@ -230,6 +231,9 @@
     } else if (config.markList.includes(uid)) {
       if (byline) applyMark(byline, uid);
     }
+    // 无论是否命中名单，都记录“已处理”，这样 unprocessAll 能清理快捷按钮并重建状态
+    el.setAttribute('data-acfun-block-processed', '1');
+    el.setAttribute('data-acfun-uid', uid);
     // 始终在卡片上添加快捷按钮（即便未屏蔽/标记也能快速操作）
     if (config.showQuickButton) addQuickButton(el, uid);
   }
@@ -503,6 +507,8 @@
    * 详情页：被屏蔽文章时显示占位
    * ============================================================ */
   function showBlockedArticlePlaceholder(uid) {
+    // 只有真实文章详情页才显示“整篇屏蔽”占位；频道页 / 列表页不应弹窗
+    if (!isOnArticleDetail()) return;
     if (processedPlaceholder === uid && document.querySelector('.acfun-blocked-article-placeholder')) {
       return;
     }
@@ -598,7 +604,7 @@
 
   function processArticleLinksIn(root, seenCards) {
     if (!root || !root.querySelectorAll) return;
-    const articleLinks = root.querySelectorAll('a[href*="/v/as"]');
+    const articleLinks = root.querySelectorAll('a[href*="/a/ac"]');
     articleLinks.forEach(articleLink => {
       if (!ARTICLE_LINK_RE.test(articleLink.href)) return;
       const card = findCardContainer(articleLink);
@@ -622,11 +628,12 @@
     if (!isOnArticleDetail()) return;
     const detail = findDetailContainer();
     if (!detail || detail === processedDetail) return;
-    processedDetail = detail;
     const authorLink = findAuthorInContainer(detail);
+    // 作者区可能比正文晚渲染：没找到作者时先不缓存，等下一次 DOM 变化再试
     if (!authorLink) return;
     const uid = extractUid(authorLink.href);
     if (!uid) return;
+    processedDetail = detail;
     processItem(detail, uid, authorLink);
     if (config.blockList.includes(uid)) {
       try { showBlockedArticlePlaceholder(uid); } catch (e) { console.warn('[AcFunBlock] placeholder', e); }
@@ -640,14 +647,18 @@
       return;
     }
 
-    // 1. 文章卡片（列表）
+    // 详情页只处理正文和评论，避免把页面内的推荐卡片 / 侧栏当成列表
+    if (isOnArticleDetail()) {
+      processDetailOnce();
+      if (config.processComments) processUserLinksIn(document);
+      return;
+    }
+
+    // 1. 文章卡片（频道页 / 列表页 / 首页）
     const seenCards = new Set();
     processArticleLinksIn(document, seenCards);
 
-    // 2. 文章详情页主体
-    processDetailOnce();
-
-    // 3. 评论区
+    // 2. 评论区
     if (config.processComments) {
       processUserLinksIn(document);
     }
@@ -656,13 +667,14 @@
   // 增量扫描：仅处理新增节点（避免 250ms 全量重扫）
   function processIncremental(mutations) {
     if (!config || !config.enabled) return;
+    const detailPage = isOnArticleDetail();
     const seenCards = new Set();
     for (const m of mutations) {
       if (m.type !== 'childList' || !m.addedNodes || !m.addedNodes.length) continue;
       for (const node of m.addedNodes) {
         if (node.nodeType !== 1) continue; // 只处理元素
         if (node.tagName === 'A' && node.href) {
-          if (ARTICLE_LINK_RE.test(node.href)) {
+          if (!detailPage && ARTICLE_LINK_RE.test(node.href)) {
             const card = findCardContainer(node);
             if (card && !seenCards.has(card)) {
               seenCards.add(card);
@@ -674,19 +686,21 @@
             if (commentContainer) processCommentEl(commentContainer, node);
           }
         } else {
-          processArticleLinksIn(node, seenCards);
+          if (!detailPage) processArticleLinksIn(node, seenCards);
           if (config.processComments) processUserLinksIn(node);
         }
       }
     }
     // 详情页主体可能被替换（路由切换 SPA）
-    if (isOnArticleDetail()) processDetailOnce();
+    if (detailPage) processDetailOnce();
   }
 
   /* ============================================================
    * 清理
    * ============================================================ */
   function unprocessAll() {
+    if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+    pendingMutations = [];
     document.querySelectorAll('[data-acfun-block-processed]').forEach(clearMarks);
     document.querySelectorAll('.acfun-blocked-article-placeholder').forEach(el => el.remove());
     resetProcessedSets();
@@ -697,10 +711,19 @@
    * ============================================================ */
   function setupObserver() {
     if (observer) observer.disconnect();
+    pendingMutations = [];
     observer = new MutationObserver((mutations) => {
       if (!config || !config.enabled) return;
+      // 注意：debounce 期间必须累积所有 mutation，不能只保留最后一批，
+      // 否则异步渲染的评论 / 卡片（分批插入）会被漏掉。
+      if (mutations && mutations.length) pendingMutations.push(...mutations);
       if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => processIncremental(mutations), 250);
+      debounceTimer = setTimeout(() => {
+        const batch = pendingMutations;
+        pendingMutations = [];
+        debounceTimer = null;
+        processIncremental(batch);
+      }, 250);
     });
     observer.observe(document.body, {
       childList: true,

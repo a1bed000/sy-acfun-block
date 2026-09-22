@@ -88,6 +88,10 @@
 }
 
 /* 快捷操作按钮 */
+.acfun-quick-host {
+  position: relative;
+}
+
 .acfun-quick-action {
   position: absolute;
   top: 4px;
@@ -106,7 +110,7 @@
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-[data-acfun-block-processed]:hover > .acfun-quick-action,
+.acfun-quick-host:hover > .acfun-quick-action,
 .acfun-quick-action:hover,
 .acfun-quick-action:focus {
   opacity: 1;

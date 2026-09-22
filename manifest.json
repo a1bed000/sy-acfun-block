@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "AcFun 文章区助手",
-  "version": "1.0.1",
-  "description": "在 AcFun 文章区（/v/as*）识别、屏蔽或标记特定 UID 发布的内容，提升浏览体验",
+  "version": "1.0.2",
+  "description": "在 AcFun 文章频道 / 列表 / 详情页识别、屏蔽或标记特定 UID 发布的内容，提升浏览体验",
   "author": "you",
   "minimum_chrome_version": "100",
 
@@ -21,9 +21,11 @@
   "content_scripts": [
     {
       "matches": [
-        "*://www.acfun.cn/v/as*",
         "*://www.acfun.cn/",
-        "*://www.acfun.cn/?*"
+        "*://www.acfun.cn/?*",
+        "*://www.acfun.cn/v/as*",
+        "*://www.acfun.cn/v/list*",
+        "*://www.acfun.cn/a/ac*"
       ],
       "js": [
         "src/shared/storage.js",
